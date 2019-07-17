@@ -17,6 +17,8 @@ import org.slf4j.LoggerFactory;
 /**
  * RPC Handler（RPC request processor）
  *
+ * SimpleChannelInboundHandler 是对ChannelInboundHandlerAdapter的进一层封装，
+ * 提供了站的消息可以通过泛型来规定。SimpleChannelInboundHandler使用了适配器模式
  * @author luxiaoxun
  */
 public class RpcHandler extends SimpleChannelInboundHandler<RpcRequest> {
@@ -44,16 +46,43 @@ public class RpcHandler extends SimpleChannelInboundHandler<RpcRequest> {
                     response.setError(t.toString());
                     logger.error("RPC Server handle request error", t);
                 }
-                ctx.writeAndFlush(response).addListener(new ChannelFutureListener() {
+                /**
+                 * ChannelFuture 是一个将channel操作返回结果的处理对象，
+                 * 异步处理立即返回该对象，生命周期有两种时间段
+                 * 1：还未完成。
+                 *    isDone（）；isSuccess（）；isCancelled（）都是false cause() null
+                 * 2：已完成。
+                 *    sucess   isDone（）true；isSuccess（） true
+                 *    faliure  isDone（）true；isSuccess（）false  cause() non-null
+                 *    cancell  isDone（）true；isCancelled（）true
+                 */
+                ChannelFuture channelFuture = ctx.writeAndFlush(response);
+                /**
+                 * 添加异步回调机制， 处理当前channel用的异步结果
+                 */
+                channelFuture.addListener(new ChannelFutureListener() {
                     @Override
                     public void operationComplete(ChannelFuture channelFuture) throws Exception {
-                        logger.debug("Send response for request " + request.getRequestId());
+                        if(channelFuture.isDone() && channelFuture.isSuccess()){
+                            logger.debug("Send response for request " + request.getRequestId());
+                        }
+
                     }
                 });
             }
         });
     }
 
+    /**
+     * 函数主要是将C端发送的函数信息，在根据自定义的协议解析后获取相应的函数信息，
+     * 类名，方法名，方法参数类的数组，方法参数数组
+     * 为了节省创建类的时间和消耗的资源，根据类名直接从map中直接获取类已创建的对象
+     * 然后使用 cgLid FastClass代替 jdk 的invoke。
+     *
+     * @param request
+     * @return
+     * @throws Throwable
+     */
     private Object handle(RpcRequest request) throws Throwable {
         String className   = request.getClassName();
         Object serviceBean = handlerMap.get(className);

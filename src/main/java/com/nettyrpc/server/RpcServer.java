@@ -40,7 +40,7 @@ public class RpcServer implements ApplicationContextAware, InitializingBean {
     private ServiceRegistry serviceRegistry;
 
     private Map<String, Object> handlerMap = new HashMap<>();
-    private static ThreadPoolExecutor threadPoolExecutor;
+    private static volatile ThreadPoolExecutor threadPoolExecutor;
 
     private EventLoopGroup bossGroup = null;
     private EventLoopGroup workerGroup = null;
@@ -54,6 +54,12 @@ public class RpcServer implements ApplicationContextAware, InitializingBean {
         this.serviceRegistry = serviceRegistry;
     }
 
+    /**
+     * 利用spring在server启动时将所有服务进行注册， 以缩短处理时频繁创建类实例
+     * （但是要注意类属性的线程安全问题）
+     * @param ctx
+     * @throws BeansException
+     */
     @Override
     public void setApplicationContext(ApplicationContext ctx) throws BeansException {
         Map<String, Object> serviceBeanMap = ctx.getBeansWithAnnotation(RpcService.class);
@@ -107,18 +113,28 @@ public class RpcServer implements ApplicationContextAware, InitializingBean {
             workerGroup = new NioEventLoopGroup();
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class)
+                    .option(ChannelOption.SO_BACKLOG, 128)
+                    .childOption(ChannelOption.SO_KEEPALIVE, true)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(SocketChannel channel) throws Exception {
                             channel.pipeline()
-                                    .addLast(new LengthFieldBasedFrameDecoder(65536, 0, 4, 0, 0))
+                                    /**
+                                     * 使用netty自带的Bytes序列化解码类， 通过 数据长度 + 数据的方式来动态
+                                     * 从TCP网络缓存中读取Bytes数据， 凭借该方法来解决， 粘包，拆包的问题。
+                                     * 吆很好很给力 !!!
+                                     **/
+                                    .addLast(new LengthFieldBasedFrameDecoder(
+                                            65536
+                                            , 0
+                                            , 4
+                                            , 0
+                                            , 0))
                                     .addLast(new RpcDecoder(RpcRequest.class))
                                     .addLast(new RpcEncoder(RpcResponse.class))
                                     .addLast(new RpcHandler(handlerMap));
                         }
-                    })
-                    .option(ChannelOption.SO_BACKLOG, 128)
-                    .childOption(ChannelOption.SO_KEEPALIVE, true);
+                    });
 
             String[] array = serverAddress.split(":");
             String host = array[0];
